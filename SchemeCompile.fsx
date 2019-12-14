@@ -811,18 +811,18 @@ type Match = System.Text.RegularExpressions.Match
 type RegexOptions = System.Text.RegularExpressions.RegexOptions
 type ObjectIDGenerator = System.Runtime.Serialization.ObjectIDGenerator
 
-type SuccessParseResult<'T> =
+type ParseSuccess<'T> =
   { S_Value : 'T ;
     S_Length : int
   }
 
-type FailParseResult =
+type ParseFailure =
   { F_Messages : Set<int * string>
   }
 
 type ParseResult<'T> =
-  | Success of SuccessParseResult<'T>
-  | Failure of FailParseResult
+  | Success of ParseSuccess<'T>
+  | Failure of ParseFailure
 
 type System.Runtime.Serialization.ObjectIDGenerator with
   member this.GetId(o : obj) =
