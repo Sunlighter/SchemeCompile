@@ -1321,3 +1321,166 @@ let pcTest4 =
   "    (other-constant 100.0)) " +
   "  (let ((add-my-constant (make-adder my-constant))) " +
   "    (add-my-constant other-constant)))"
+
+type RuntimeProcedure =
+  { RP_MinArity : int ;
+    RP_More : bool ;
+    RP_Captures : (RuntimeDatum ref) array ;
+    RP_Target : int
+  }
+and RuntimeDatum =
+  | R_Unspecified
+  | R_Bool of bool
+  | R_Int of bigint
+  | R_Float of float
+  | R_Char of char
+  | R_String of string
+  | R_Symbol of Symbol
+  | R_List of RuntimeDatum list
+  | R_Vector of RuntimeDatum[]
+  | R_Procedure of RuntimeProcedure
+
+type RuntimeMakeProcedureArgs =
+  { RMPA_MinArity : int ;
+    RMPA_More : bool ;
+    RMPA_Captures : int array ;
+    RMPA_Target : int
+  }
+
+type RuntimeOpcode =
+  | RO_CreateLiteralPool of int
+  | RO_LdBool of bool
+  | RO_LdInt of bigint
+  | RO_LdFloat of float
+  | RO_LdChar of char
+  | RO_LdStr of string
+  | RO_LdSymbol of Symbol
+  | RO_Gensym
+  | RO_LdEmptyList
+  | RO_ConsList
+  | RO_MkVector of int
+  | RO_SetVectorElement of int // vector val -> vector
+  | RO_StoreLiteral of int
+  | RO_LdLiteral of int
+  | RO_VarRef of int
+  | RO_VarSet of int // value -> unspecified-obj
+  | RO_Ret
+  | RO_LdUnspecified
+  | RO_Drop
+  | RO_JumpIfFalse of int
+  | RO_Jump of int
+  | RO_JumpIfTrue of int
+  | RO_Dup
+  | RO_CallPrimitive of Symbol * int
+  | RO_TailCallPrimitive of Symbol * int
+  | RO_Call of int
+  | RO_TailCall of int
+  | RO_MkProcedure of RuntimeMakeProcedureArgs
+  | RO_CallWithCatch of int
+  | RO_Swap
+  | RO_Let of LetArgs
+  | RO_LetRec of LetArgs
+  | RO_CallLetRec of int // pops 1 procedure from the stack, passes N dummy values to it
+
+let rec datumToRuntimeDatum (d : Datum) =
+  match d with
+    | D_Unspecified -> R_Unspecified
+    | D_Bool b -> R_Bool b
+    | D_Int i -> R_Int i
+    | D_Float f -> R_Float f
+    | D_Char c -> R_Char c
+    | D_String s -> R_String s
+    | D_Symbol sym -> R_Symbol sym
+    | D_List l -> R_List (List.map datumToRuntimeDatum l)
+    | D_Vector v -> R_Vector (Array.map datumToRuntimeDatum v)
+
+let opcodeLength (o : Opcode) =
+  match o with
+    | O_Label _ -> 0
+    | _ -> 1
+
+let opcodeListLength (ol : Opcode list) = List.fold (fun acc o -> acc + opcodeLength o) 0 ol
+
+let makeLabelMap (ol : Opcode list) =
+  let rec loop (olremain : Opcode list) (currentIndex : int) (labelMap : Map<Symbol, int>) =
+    match olremain with
+      | [] -> labelMap
+      | o :: t ->
+          match o with
+            | O_Label lbl ->
+                loop t currentIndex (Map.add lbl currentIndex labelMap)
+            | _ ->
+                loop t (currentIndex + opcodeLength o) labelMap
+  loop ol 0 Map.empty
+
+let opcodeToRuntimeOpcode (labelMap : Map<Symbol, int>) (o : Opcode) =
+  match o with
+    | O_CreateLiteralPool i -> RO_CreateLiteralPool i
+    | O_LdBool b -> RO_LdBool b
+    | O_LdInt i -> RO_LdInt i
+    | O_LdFloat f -> RO_LdFloat f
+    | O_LdChar ch -> RO_LdChar ch
+    | O_LdStr str -> RO_LdStr str
+    | O_LdSymbol sym -> RO_LdSymbol sym
+    | O_Gensym -> RO_Gensym
+    | O_LdEmptyList -> RO_LdEmptyList
+    | O_ConsList -> RO_ConsList
+    | O_MkVector size -> RO_MkVector size
+    | O_SetVectorElement index -> RO_SetVectorElement index // vector val -> vector
+    | O_StoreLiteral index -> RO_StoreLiteral index
+    | O_LdLiteral index -> RO_LdLiteral index
+    | O_VarRef index -> RO_VarRef index
+    | O_VarSet index -> RO_VarSet index // value -> unspecified-obj
+    | O_Ret -> RO_Ret
+    | O_LdUnspecified -> RO_LdUnspecified
+    | O_Drop -> RO_Drop
+    | O_JumpIfFalse sym -> RO_JumpIfFalse (Map.find sym labelMap)
+    | O_Label _ -> failwith "Label not expected here"
+    | O_Jump sym -> RO_Jump (Map.find sym labelMap)
+    | O_JumpIfTrue sym -> RO_JumpIfTrue (Map.find sym labelMap)
+    | O_Dup -> RO_Dup
+    | O_CallPrimitive (name, args) -> RO_CallPrimitive (name, args)
+    | O_TailCallPrimitive (name, args) -> RO_TailCallPrimitive (name, args)
+    | O_Call args -> RO_Call args
+    | O_TailCall args -> RO_TailCall args
+    | O_MkProcedure mpa -> RO_MkProcedure { RMPA_MinArity = mpa.MPA_MinArity ; RMPA_More = mpa.MPA_More ; RMPA_Captures = mpa.MPA_Captures ; RMPA_Target = Map.find mpa.MPA_Target labelMap }
+    | O_CallWithCatch args -> RO_CallWithCatch args
+    | O_Swap -> RO_Swap
+    | O_Let letArgs -> RO_Let letArgs
+    | O_LetRec letArgs -> RO_LetRec letArgs
+    | O_CallLetRec args -> RO_CallLetRec args // pops 1 procedure from the stack, passes N dummy values to it
+
+let makeRuntimeOpcodeArray (ol : Opcode list) =
+  let labelMap = makeLabelMap ol
+  let arrayLen = opcodeListLength ol
+  let rec loop (olremain : Opcode list) (currentIndex : int) (acc : RuntimeOpcode list) =
+    match olremain with
+      | [] -> List.rev acc |> List.toArray
+      | o :: t ->
+          match o with
+            | O_Label _ ->
+                loop t currentIndex acc
+            | _ ->
+                let ro = opcodeToRuntimeOpcode labelMap o
+                loop t (currentIndex + opcodeLength o) (ro :: acc)
+  loop ol 0 []
+
+type MachineState =
+  { MS_Stack : RuntimeDatum list ;
+    MS_PC : int ;
+    MS_Literals : RuntimeDatum array
+    MS_Env : (RuntimeDatum ref) array
+  }
+
+let parseForRunning (x : string) =
+  let parseResult = Parser.run parseDatum x
+  match Parser.run parseDatum x with
+    | Success { S_Value = s ; S_Length = _ } ->
+        match analyze s with
+          | Some a -> compileFlat a |> makeRuntimeOpcodeArray |> Some
+          | None ->
+              printfn "Analysis failed"
+              None
+    | Failure f ->
+        printfn "Parse failed"
+        None
