@@ -1472,6 +1472,13 @@ type MachineState =
     MS_Env : (RuntimeDatum ref) array
   }
 
+let initialMachineState =
+  { MS_Stack = [] ;
+    MS_PC = 0 ;
+    MS_Literals = [||] ;
+    MS_Env = [||]
+  }
+
 let parseForRunning (x : string) =
   let parseResult = Parser.run parseDatum x
   match Parser.run parseDatum x with
@@ -1484,3 +1491,110 @@ let parseForRunning (x : string) =
     | Failure f ->
         printfn "Parse failed"
         None
+
+let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
+  match ro with
+    | RO_CreateLiteralPool size ->
+        { ms with MS_Literals = Array.init size (fun _ -> R_Unspecified) }
+    | RO_LdBool b ->
+        { ms with MS_Stack = (R_Bool b) :: ms.MS_Stack }
+    | RO_LdInt i ->
+        { ms with MS_Stack = (R_Int i) :: ms.MS_Stack }
+    | RO_LdFloat f ->
+        { ms with MS_Stack = (R_Float f) :: ms.MS_Stack }
+    | RO_LdChar ch ->
+        { ms with MS_Stack = (R_Char ch) :: ms.MS_Stack }
+    | RO_LdStr str ->
+        { ms with MS_Stack = (R_String str) :: ms.MS_Stack }
+    | RO_LdSymbol sym ->
+        { ms with MS_Stack = (R_Symbol sym) :: ms.MS_Stack }
+    | RO_Gensym ->
+        { ms with MS_Stack = (R_Symbol (gensym ())) :: ms.MS_Stack }
+    | RO_LdEmptyList ->
+        { ms with MS_Stack = (R_List []) :: ms.MS_Stack }
+    | RO_ConsList ->
+        match ms.MS_Stack with
+          | v2 :: v1 :: rest ->
+              { ms with MS_Stack = (R_List (v1 :: (match v2 with | R_List l -> l | _ -> failwith "RO_ConsList: type mismatch"))) :: rest }
+          | _ -> failwith "RO_ConsList: stack underflow"
+    | RO_MkVector size ->
+        { ms with MS_Stack = (R_Vector (Array.init size (fun _ -> R_Unspecified))) :: ms.MS_Stack }
+    | RO_SetVectorElement index ->
+        match ms.MS_Stack with
+          | vec :: theVal :: rest ->
+              match vec with
+                | R_Vector rvec ->
+                    rvec[index] <- theVal
+                    { ms with MS_Stack = vec :: rest }
+                | _ -> failwith "RO_SetVectorElement: type mismatch"
+          | _ -> failwith "RO_SetVectorElement: stack underflow"
+    | RO_StoreLiteral index ->
+        match ms.MS_Stack with
+          | theVal :: rest ->
+              ms.MS_Literals[index] <- theVal
+              { ms with MS_Stack = rest }
+          | _ -> failwith "RO_StoreLiteral: stack underflow"
+    | RO_LdLiteral index ->
+        { ms with MS_Stack = ms.MS_Literals[index] :: ms.MS_Stack }
+    | RO_VarRef index ->
+        { ms with MS_Stack = ms.MS_Env[index].Value :: ms.MS_Stack }
+    | RO_VarSet index ->
+        match ms.MS_Stack with
+          | theVal :: rest ->
+              ms.MS_Env[index].Value <- theVal
+              { ms with MS_Stack = R_Unspecified :: rest }
+          | _ -> failwith "RO_VarSet: stack underflow"
+    // RO_Ret
+    | RO_LdUnspecified ->
+        { ms with MS_Stack = R_Unspecified :: ms.MS_Stack }
+    | RO_Drop ->
+        match ms.MS_Stack with
+          | _ :: rest ->
+              { ms with MS_Stack = rest }
+          | _ -> failwith "RO_Drop: stack underflow"
+    | RO_JumpIfFalse target ->
+        match ms.MS_Stack with
+          | v :: rest ->
+              match v with
+                | R_Bool b ->
+                    if b then
+                      { ms with MS_Stack = rest }
+                    else
+                      { ms with MS_PC = target ; MS_Stack = rest }
+                | _ ->
+                    { ms with MS_Stack = rest } // anything not false is true
+          | _ -> failwith "RO_JumpIfFalse: stack underflow"
+    | RO_Jump target ->
+        { ms with MS_PC = target }
+    | RO_JumpIfTrue target ->
+        match ms.MS_Stack with
+          | v :: rest ->
+              match v with
+                | R_Bool b ->
+                    if b then
+                      { ms with MS_PC = target ; MS_Stack = rest }
+                    else
+                      { ms with MS_Stack = rest }
+                | _ ->
+                    { ms with MS_PC = target ; MS_Stack = rest } // anything not false is true
+          | _ -> failwith "RO_JumpIfFalse: stack underflow"
+    | RO_Dup ->
+        match ms.MS_Stack with
+          | v :: rest ->
+              { ms with MS_Stack = v :: v :: rest }
+          | _ -> failwith "RO_Dup: stack underflow"
+    // RO_CallPrimitive
+    // RO_TailCallPrimitive
+    // RO_Call
+    // RO_TailCall
+    // RO_MkProcedure
+    // RO_CallWithCatch
+    | RO_Swap ->
+        match ms.MS_Stack with
+          | v1 :: v2 :: rest ->
+              { ms with MS_Stack = v2 :: v1 :: rest }
+          | _ -> failwith "RO_Swap: stack underflow"
+    // RO_Let
+    // RO_LetRec
+    // RO_CallLetRec
+    | _ -> failwith "Opcode not implemented yet"
