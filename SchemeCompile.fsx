@@ -6,8 +6,8 @@ type Symbol =
 let nextSym = ref 0
 
 let gensym () =
-  let p = !nextSym
-  nextSym := 1 + !nextSym
+  let p = nextSym.Value
+  nextSym.Value <- 1 + nextSym.Value
   (S_Uninterned p)
 
 type Datum =
@@ -677,8 +677,8 @@ let codeToWrites (opl : Opcode list) =
       opl
   let doCapturesArray (arr : int[]) =
     assert ((Array.length arr) > 0)
-    let iPtr = (sprintf "captures_%i" !nextSym)
-    nextSym := 1 + !nextSym
+    let iPtr = (sprintf "captures_%i" nextSym.Value)
+    nextSym.Value <- 1 + nextSym.Value
     let code =
       [ (W_Write (sprintf "int %s[]" iPtr)) ; (W_Write (sprintf " = { %i" arr.[0])) ]
       @ List.map (fun j -> (W_Write (sprintf ", %i" j))) (List.tail (Array.toList arr))
@@ -805,11 +805,23 @@ let show (x : ExprSrc) = write (System.Console.Out) (codeToWrites (compileFlat x
 
 // ----- Packrat Parser Combinators -----
 
+type ObjectIDGenerator2() =
+  class
+    let dict = new System.Collections.Generic.Dictionary<obj, int64>(System.Collections.Generic.ReferenceEqualityComparer.Instance)
+
+    member this.GetId(o : obj) =
+      match dict.TryGetValue(o) with
+        | (true, id) -> id
+        | (false, _) ->
+            let id = int64 dict.Count
+            dict.Add(o, id)
+            id
+  end
+
 type StringComparison = System.StringComparison
 type Regex = System.Text.RegularExpressions.Regex
 type Match = System.Text.RegularExpressions.Match
 type RegexOptions = System.Text.RegularExpressions.RegexOptions
-type ObjectIDGenerator = System.Runtime.Serialization.ObjectIDGenerator
 
 type ParseSuccess<'T> =
   { S_Value : 'T ;
@@ -823,11 +835,6 @@ type ParseFailure =
 type ParseResult<'T> =
   | Success of ParseSuccess<'T>
   | Failure of ParseFailure
-
-type System.Runtime.Serialization.ObjectIDGenerator with
-  member this.GetId(o : obj) =
-    let firstTime = ref false
-    this.GetId(o, firstTime)
 
 type ICharParser<'T> =
   interface
@@ -844,19 +851,19 @@ type CharParserContext(input : string) =
   class
     let memos : Map<int64 * int, obj> ref = ref Map.empty
     let inProgress : Set<int64 * int> ref = ref Set.empty
-    let idgen = new ObjectIDGenerator()
+    let idgen = new ObjectIDGenerator2()
     interface ICharParserContext with
       member this.TryParse<'T> (parser : ICharParser<'T>) (pos : int) =
         let parserId = idgen.GetId(parser)
-        match Map.tryFind (parserId, pos) !memos with
+        match Map.tryFind (parserId, pos) memos.Value with
           | None ->
-              if Set.contains (parserId, pos) !inProgress then
+              if Set.contains (parserId, pos) inProgress.Value then
                 failwith "Left recursion detected!"
               else
-                inProgress := Set.add (parserId, pos) !inProgress
+                inProgress.Value <- Set.add (parserId, pos) inProgress.Value
                 let result = parser.TryParse2 pos this
-                inProgress := Set.remove (parserId, pos) !inProgress
-                memos := Map.add (parserId, pos) (result :> obj) !memos
+                inProgress.Value <- Set.remove (parserId, pos) inProgress.Value
+                memos.Value <- Map.add (parserId, pos) (result :> obj) memos.Value
                 result
           | Some r ->
              r :?> ParseResult<'T>
@@ -1022,14 +1029,14 @@ module Parser =
       let p =
         { new ICharParser<'T> with
             member this.TryParse2 (pos : int) (context : ICharParserContext) =
-              match !pref with
+              match pref.Value with
                 | None ->
                     Failure { F_Messages = Set.singleton (pos, "Unassigned parser") }
                 | Some p2 ->
                     context.TryParse p2 pos
         }
       let p2 = (f p)
-      pref := Some p2
+      pref.Value <- Some p2
       p2
 
     let ifFollowedBy (t : ICharParser<'T>) (u : ICharParser<unit>) =
