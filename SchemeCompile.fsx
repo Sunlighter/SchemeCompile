@@ -1501,6 +1501,11 @@ let parseForRunning (x : string) =
         printfn "Parse failed"
         None
 
+let isTruthy (v : RuntimeDatum) =
+  match v with
+    | R_Bool false -> false
+    | _ -> true
+
 let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
   match ro with
     | RO_CreateLiteralPool size ->
@@ -1564,28 +1569,20 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
     | RO_JumpIfFalse target ->
         match ms.MS_Stack with
           | v :: rest ->
-              match v with
-                | R_Bool b ->
-                    if b then
-                      { ms with MS_Stack = rest }
-                    else
-                      { ms with MS_PC = target ; MS_Stack = rest }
-                | _ ->
-                    { ms with MS_Stack = rest } // anything not false is true
+              if isTruthy v then
+                { ms with MS_Stack = rest }
+              else
+                { ms with MS_PC = target ; MS_Stack = rest }
           | _ -> failwith "RO_JumpIfFalse: stack underflow"
     | RO_Jump target ->
         { ms with MS_PC = target }
     | RO_JumpIfTrue target ->
         match ms.MS_Stack with
           | v :: rest ->
-              match v with
-                | R_Bool b ->
-                    if b then
-                      { ms with MS_PC = target ; MS_Stack = rest }
-                    else
-                      { ms with MS_Stack = rest }
-                | _ ->
-                    { ms with MS_PC = target ; MS_Stack = rest } // anything not false is true
+              if isTruthy v then
+                { ms with MS_PC = target ; MS_Stack = rest }
+              else
+                { ms with MS_Stack = rest }
           | _ -> failwith "RO_JumpIfFalse: stack underflow"
     | RO_Dup ->
         match ms.MS_Stack with
