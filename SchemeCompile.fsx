@@ -1617,7 +1617,7 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                 { ms with MS_PC = target ; MS_Stack = rest }
               else
                 { ms with MS_Stack = rest }
-          | _ -> failwith "RO_JumpIfFalse: stack underflow"
+          | _ -> failwith "RO_JumpIfTrue: stack underflow"
     | RO_Dup ->
         match ms.MS_Stack with
           | v :: rest ->
