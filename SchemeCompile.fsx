@@ -1479,13 +1479,23 @@ type MachineState =
     MS_PC : int ;
     MS_Literals : RuntimeDatum array
     MS_Env : (RuntimeDatum ref) array
+    MS_ReturnTo : RuntimeContinuation
   }
+and ContinuationData =
+  { RD_Stack : RuntimeDatum list ;
+    RD_PC : int ;
+    RD_Env : (RuntimeDatum ref) array
+  }
+and RuntimeContinuation =
+  | RK_FinalContinuation
+  | RK_Continuation of ContinuationData
 
 let initialMachineState =
   { MS_Stack = [] ;
     MS_PC = 0 ;
     MS_Literals = [||] ;
-    MS_Env = [||]
+    MS_Env = [||] ;
+    MS_ReturnTo = RK_FinalContinuation
   }
 
 let parseForRunning (x : string) =
