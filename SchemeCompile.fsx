@@ -410,13 +410,22 @@ let rec compile (uninternedMap : Map<Symbol, int>) (lso : int) (envDesc : Map<Sy
         }
     | ES_Catch { crsrc_handler = h ; crsrc_body = b } ->
         let ch = compile uninternedMap lso envDesc false h
-        let cb = compile uninternedMap (lso + literalSlots h) envDesc false (ES_Lambda ((PSS_Items []), b))
-        let lbl1 = gensym ()
-        let lbl2 = gensym ()
-        { CF_Init = ch.CF_Init @ cb.CF_Init ;
-          CF_Body = retIfTail tail (cb.CF_Body @ [ (O_CallWithCatch 1) ; (O_JumpIfFalse lbl1) ] @ ch.CF_Body @ [ O_Swap ; (O_Call 2) ; (O_Label lbl1) ]) ;
-          CF_Deferral = ch.CF_Deferral @ cb.CF_Deferral
-        }
+        match b with
+          | ES_Invoke funcArgs ->
+              let (count, lsoFinal, cRev) = List.fold (fun (count, lso, clist) x -> ((count + 1), (lso + literalSlots x), ((compile uninternedMap lso envDesc false x) :: clist))) (0, lso, []) funcArgs
+              let c = List.rev cRev
+              let lbl1 = gensym ()
+              { CF_Init = ch.CF_Init @ (List.collect (fun b -> b.CF_Init) c) ;
+                CF_Body = retIfTail tail ((List.collect (fun b -> b.CF_Body) c) @ [ (O_CallWithCatch count) ; (O_JumpIfFalse lbl1) ] @ ch.CF_Body @ [ O_Swap ; (O_Call 2) ; (O_Label lbl1) ]) ;
+                CF_Deferral = ch.CF_Deferral @ (List.concat (List.map (fun cf -> cf.CF_Deferral) c))
+              }
+          | _ ->
+            let cb = compile uninternedMap (lso + literalSlots h) envDesc false (ES_Lambda ((PSS_Items []), b))
+            let lbl1 = gensym ()
+            { CF_Init = ch.CF_Init @ cb.CF_Init ;
+              CF_Body = retIfTail tail (cb.CF_Body @ [ (O_CallWithCatch 0) ; (O_JumpIfFalse lbl1) ] @ ch.CF_Body @ [ O_Swap ; (O_Call 2) ; (O_Label lbl1) ]) ;
+              CF_Deferral = ch.CF_Deferral @ cb.CF_Deferral
+            }
     | ES_Let (clauses, body) ->
         if List.isEmpty clauses then
           compile uninternedMap lso envDesc tail body
