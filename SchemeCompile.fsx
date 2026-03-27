@@ -1477,25 +1477,29 @@ let makeRuntimeOpcodeArray (ol : Opcode list) =
 type MachineState =
   { MS_Stack : RuntimeDatum list ;
     MS_PC : int ;
-    MS_Literals : RuntimeDatum array
-    MS_Env : (RuntimeDatum ref) array
-    MS_ReturnTo : RuntimeContinuation
+    MS_Literals : RuntimeDatum array ;
+    MS_Env : (RuntimeDatum ref) array ;
+    MS_ReturnTo : RuntimeContinuation ;
+    MS_Done : bool
   }
 and ContinuationData =
   { RD_Stack : RuntimeDatum list ;
     RD_PC : int ;
     RD_Env : (RuntimeDatum ref) array
+    RD_ReturnTo : RuntimeContinuation
   }
 and RuntimeContinuation =
   | RK_FinalContinuation
   | RK_Continuation of ContinuationData
+  | RK_ContinuationWithCatch of ContinuationData
 
 let initialMachineState =
   { MS_Stack = [] ;
     MS_PC = 0 ;
     MS_Literals = [||] ;
     MS_Env = [||] ;
-    MS_ReturnTo = RK_FinalContinuation
+    MS_ReturnTo = RK_FinalContinuation ;
+    MS_Done = false
   }
 
 let parseForRunning (x : string) =
@@ -1568,7 +1572,27 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
               ms.MS_Env[index].Value <- theVal
               { ms with MS_Stack = R_Unspecified :: rest }
           | _ -> failwith "RO_VarSet: stack underflow"
-    // RO_Ret
+    | RO_Ret ->
+        match ms.MS_Stack with
+          | returnVal :: _ ->
+              match ms.MS_ReturnTo with
+                | RK_Continuation kd ->
+                    { ms with
+                        MS_Stack = returnVal :: kd.RD_Stack ;
+                        MS_PC = kd.RD_PC ;
+                        MS_Env = Array.copy kd.RD_Env ;
+                        MS_ReturnTo = kd.RD_ReturnTo
+                    }
+                | RK_ContinuationWithCatch kd ->
+                    { ms with
+                        MS_Stack = (R_Bool false) :: returnVal :: kd.RD_Stack ;
+                        MS_PC = kd.RD_PC ;
+                        MS_Env = Array.copy kd.RD_Env ;
+                        MS_ReturnTo = kd.RD_ReturnTo
+                    }
+                | RK_FinalContinuation ->
+                    { ms with MS_Done = true }
+          | _ -> failwith "RO_Ret: stack underflow"
     | RO_LdUnspecified ->
         { ms with MS_Stack = R_Unspecified :: ms.MS_Stack }
     | RO_Drop ->
