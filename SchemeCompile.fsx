@@ -1520,6 +1520,73 @@ let isTruthy (v : RuntimeDatum) =
     | R_Bool false -> false
     | _ -> true
 
+let doCaptures (env : (RuntimeDatum ref array)) (captures : int array) =
+  Array.map (fun i -> env[i]) captures
+
+type DoExtendArgs =
+  { DE_Stack : RuntimeDatum list ;
+    DE_ActualArity : int ;
+    DE_ExpectedArity : int ;
+    DE_ExpectsMore : bool ;
+    DE_Captures : RuntimeDatum ref array ;
+  }
+
+type ExtendResult =
+  | ER_InsufficientArguments
+  | ER_ExcessiveArguments
+  | ER_ExtendSuccess of RuntimeDatum ref array
+
+let doExtend (a : DoExtendArgs) =
+  let newRefs : RuntimeDatum ref list ref = ref []
+  let newRefsLen : int ref = ref 0
+  let finalize () =
+    if newRefsLen.Value = 0 then
+      a.DE_Captures
+    else
+      let arrLen = Array.length a.DE_Captures + newRefsLen.Value
+      let arr = Array.init arrLen (fun i -> if i < a.DE_Captures.Length then a.DE_Captures[i] else ref R_Unspecified)
+      let rec loop (i : int) (refs : RuntimeDatum ref list) =
+        if i = Array.length a.DE_Captures then
+          arr
+        else
+          match refs with
+            | h :: t ->
+               let j = i - 1
+               arr[j] <- h
+               loop j t
+            | _ -> failwith "Unexpectedly ran out of new refs"
+      loop arrLen newRefs.Value
+  let rec transfer (count : int) (stack : RuntimeDatum list) =
+    if count = 0 then
+      stack
+    else
+      match stack with
+        | v :: rest ->
+            newRefs.Value <- (ref v) :: newRefs.Value
+            transfer (count - 1) rest
+        | _ ->
+            failwith "Unexpectedly ran out of args"
+  let transferMore (stack : RuntimeDatum list) =
+    newRefs.Value <- (ref (R_List stack)) :: newRefs.Value
+    ()
+  if (a.DE_ActualArity < a.DE_ExpectedArity) then
+    ER_InsufficientArguments
+  elif a.DE_ExpectsMore then
+    let s1 = transfer a.DE_ExpectedArity a.DE_Stack
+    transferMore s1
+    ER_ExtendSuccess (finalize ())
+  elif (a.DE_ActualArity > a.DE_ExpectedArity) then
+    ER_ExcessiveArguments
+  else
+    transfer a.DE_ExpectedArity a.DE_Stack |> ignore
+    ER_ExtendSuccess (finalize ())
+
+let tryArgSplit (i : int) (s : RuntimeDatum list) =
+  if (List.length s) >= i then
+    Some (List.take i s, List.skip i s)
+  else
+    None
+
 let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
   match ro with
     | RO_CreateLiteralPool size ->
