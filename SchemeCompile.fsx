@@ -1724,8 +1724,8 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                       | Some (args, newRest) ->
                           let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
                           match extendResult with
-                            | ER_InsufficientArguments -> failwith "RO_Call: insufficient arguments"
-                            | ER_ExcessiveArguments -> failwith "RO_Call: excessive arguments"
+                            | ER_InsufficientArguments -> failwith "RO_TailCall: insufficient arguments"
+                            | ER_ExcessiveArguments -> failwith "RO_TailCall: excessive arguments"
                             | ER_ExtendSuccess newEnv ->
                                 { ms with
                                     MS_Stack = [] ;
@@ -1733,9 +1733,9 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                                     MS_Env = newEnv
                                     // MS_ReturnTo is unmodified
                                 }
-                      | None -> failwith "RO_Call: stack underflow"
-                | _ -> failwith "RO_Call: attempt to call non-procedure"
-          | _ -> failwith "RO_Call: stack underflow (attempting to pop procedure)"
+                      | None -> failwith "RO_TailCall: stack underflow"
+                | _ -> failwith "RO_TailCall: attempt to call non-procedure"
+          | _ -> failwith "RO_TailCall: stack underflow (attempting to pop procedure)"
     | RO_MkProcedure rmpa ->
         let captures = doCaptures ms.MS_Env rmpa.RMPA_Captures
         let proc = R_Procedure { RP_MinArity = rmpa.RMPA_MinArity ; RP_More = rmpa.RMPA_More ; RP_Captures = captures ; RP_Target = rmpa.RMPA_Target }
@@ -1750,8 +1750,8 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                       | Some (args, newRest) ->
                           let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
                           match extendResult with
-                            | ER_InsufficientArguments -> failwith "RO_Call: insufficient arguments"
-                            | ER_ExcessiveArguments -> failwith "RO_Call: excessive arguments"
+                            | ER_InsufficientArguments -> failwith "RO_CallWithCatch: insufficient arguments"
+                            | ER_ExcessiveArguments -> failwith "RO_CallWithCatch: excessive arguments"
                             | ER_ExtendSuccess newEnv ->
                                 { ms with
                                     MS_Stack = [] ;
@@ -1759,9 +1759,9 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                                     MS_Env = newEnv ;
                                     MS_ReturnTo = RK_ContinuationWithCatch { RD_Stack = newRest ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
                                 }
-                      | None -> failwith "RO_Call: stack underflow"
-                | _ -> failwith "RO_Call: attempt to call non-procedure"
-          | _ -> failwith "RO_Call: stack underflow (attempting to pop procedure)"
+                      | None -> failwith "RO_CallWithCatch: stack underflow"
+                | _ -> failwith "RO_CallWithCatch: attempt to call non-procedure"
+          | _ -> failwith "RO_CallWithCatch: stack underflow (attempting to pop procedure)"
     | RO_Swap ->
         match ms.MS_Stack with
           | v1 :: v2 :: rest ->
