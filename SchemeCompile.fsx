@@ -798,7 +798,7 @@ let codeToWrites (opl : Opcode list) =
             [ (W_Write (sprintf "ms.LetRec(%i, NULL, 0);" la.LA_Variables)) ; W_NewLine ]
           else
             let (iPtr, captureCode) = doCapturesArray la.LA_Captures
-            captureCode @ [ (W_Write (sprintf "ms.Let(%i, %s, %i);" la.LA_Variables iPtr (Array.length la.LA_Captures))) ; W_NewLine ]
+            captureCode @ [ (W_Write (sprintf "ms.LetRec(%i, %s, %i);" la.LA_Variables iPtr (Array.length la.LA_Captures))) ; W_NewLine ]
       | O_CallLetRec vc ->
           [ (W_Write (sprintf "ms.CallLetRec(%i);" vc)) ; W_NewLine ]
   let wol = opl |> List.mapi (fun i x -> (i, x)) |> List.collect (fun (i, op) -> writeInstruction i op)
