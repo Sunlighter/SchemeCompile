@@ -1563,6 +1563,7 @@ let doExtend (a : DoExtendArgs) =
       match stack with
         | v :: rest ->
             newRefs.Value <- (ref v) :: newRefs.Value
+            newRefsLen.Value <- newRefsLen.Value + 1
             transfer (count - 1) rest
         | _ ->
             failwith "Unexpectedly ran out of args"
