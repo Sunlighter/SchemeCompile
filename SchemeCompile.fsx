@@ -1777,12 +1777,14 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
     | RO_Let letArgs ->
         match tryArgSplit letArgs.LA_Variables ms.MS_Stack with
           | Some (args, newStack) ->
+              assert List.isEmpty newStack
               let newEnv = doExtendLet args (doCaptures ms.MS_Env letArgs.LA_Captures)
-              { ms with MS_Env = newEnv }
+              { ms with MS_Stack = [] ; MS_Env = newEnv }
           | None -> failwith "RO_Let: stack underflow"
     | RO_LetRec letArgs ->
         let newEnv = doExtendLetRec letArgs.LA_Variables (doCaptures ms.MS_Env letArgs.LA_Captures)
-        { ms with MS_Env = newEnv }
+        assert List.isEmpty ms.MS_Stack
+        { ms with MS_Stack = [] ; MS_Env = newEnv }
     | RO_CallLetRec argCount ->
         match ms.MS_Stack with
           | uProc :: rest ->
