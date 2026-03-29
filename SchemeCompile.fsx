@@ -374,9 +374,9 @@ let rec compile (uninternedMap : Map<Symbol, int>) (lso : int) (envDesc : Map<Sy
           CF_Body = (List.collect (fun b -> b.CF_Body) c)
             @
             ( if tail then
-                [ (O_TailCall count) ]
+                [ (O_TailCall (count - 1)) ]
               else
-                [ (O_Call count) ]
+                [ (O_Call (count - 1)) ]
             ) ;
           CF_Deferral = List.concat (List.map (fun cf -> cf.CF_Deferral) c)
         }
@@ -416,14 +416,14 @@ let rec compile (uninternedMap : Map<Symbol, int>) (lso : int) (envDesc : Map<Sy
               let c = List.rev cRev
               let lbl1 = gensym ()
               { CF_Init = ch.CF_Init @ (List.collect (fun b -> b.CF_Init) c) ;
-                CF_Body = retIfTail tail ((List.collect (fun b -> b.CF_Body) c) @ [ (O_CallWithCatch count) ; (O_JumpIfFalse lbl1) ] @ ch.CF_Body @ [ O_Swap ; (O_Call 2) ; (O_Label lbl1) ]) ;
+                CF_Body = retIfTail tail ((List.collect (fun b -> b.CF_Body) c) @ [ (O_CallWithCatch count) ; (O_JumpIfFalse lbl1) ] @ ch.CF_Body @ [ O_Swap ; (O_Call 1) ; (O_Label lbl1) ]) ;
                 CF_Deferral = ch.CF_Deferral @ (List.concat (List.map (fun cf -> cf.CF_Deferral) c))
               }
           | _ ->
             let cb = compile uninternedMap (lso + literalSlots h) envDesc false (ES_Lambda ((PSS_Items []), b))
             let lbl1 = gensym ()
             { CF_Init = ch.CF_Init @ cb.CF_Init ;
-              CF_Body = retIfTail tail (cb.CF_Body @ [ (O_CallWithCatch 0) ; (O_JumpIfFalse lbl1) ] @ ch.CF_Body @ [ O_Swap ; (O_Call 2) ; (O_Label lbl1) ]) ;
+              CF_Body = retIfTail tail (cb.CF_Body @ [ (O_CallWithCatch 0) ; (O_JumpIfFalse lbl1) ] @ ch.CF_Body @ [ O_Swap ; (O_Call 1) ; (O_Label lbl1) ]) ;
               CF_Deferral = ch.CF_Deferral @ cb.CF_Deferral
             }
     | ES_Let (clauses, body) ->
