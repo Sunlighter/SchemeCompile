@@ -368,7 +368,7 @@ let rec compile (uninternedMap : Map<Symbol, int>) (lso : int) (envDesc : Map<Sy
     | ES_Invoke [] ->
         raise (new System.InvalidOperationException("Invoke requires a function"))
     | ES_Invoke xl ->
-        let (count, lsoFinal, cRev) = List.fold (fun (count, lso, clist) x -> ((count + 1), (lso + literalSlots x), ((compile uninternedMap lso envDesc false x) :: clist))) (0, lso, []) xl
+        let (count, _lsoFinal, cRev) = List.fold (fun (count, lso, clist) x -> ((count + 1), (lso + literalSlots x), ((compile uninternedMap lso envDesc false x) :: clist))) (0, lso, []) xl
         let c = List.rev cRev
         { CF_Init = (List.collect (fun b -> b.CF_Init) c) ;
           CF_Body = (List.collect (fun b -> b.CF_Body) c)
@@ -381,7 +381,7 @@ let rec compile (uninternedMap : Map<Symbol, int>) (lso : int) (envDesc : Map<Sy
           CF_Deferral = List.concat (List.map (fun cf -> cf.CF_Deferral) c)
         }
     | ES_Primitive (p, xl) ->
-        let (count, lsoFinal, cRev) = List.fold (fun (count, lso, clist) x -> ((count + 1), (lso + literalSlots x), ((compile uninternedMap lso envDesc false x) :: clist))) (0, lso, []) xl
+        let (count, _lsoFinal, cRev) = List.fold (fun (count, lso, clist) x -> ((count + 1), (lso + literalSlots x), ((compile uninternedMap lso envDesc false x) :: clist))) (0, lso, []) xl
         let c = List.rev cRev
         { CF_Init = (List.collect (fun b -> b.CF_Init) c) ;
           CF_Body = (List.collect (fun b -> b.CF_Body) c)
