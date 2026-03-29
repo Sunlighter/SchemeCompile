@@ -1792,7 +1792,7 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                         MS_Stack = [] ;
                         MS_PC = proc.RP_Target ;
                         MS_Env = doExtendLetRec argCount proc.RP_Captures ;
-                        MS_ReturnTo = RK_Continuation { RD_Stack = ms.MS_Stack ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
+                        MS_ReturnTo = RK_Continuation { RD_Stack = rest ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
                     }
                 | _ -> failwith "RO_CallLetRec: attempt to call non-procedure"
           | _ -> failwith "RO_CallLetRec: stack underflow (attempting to pop procedure)"
