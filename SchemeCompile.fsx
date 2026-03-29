@@ -1582,6 +1582,12 @@ let doExtend (a : DoExtendArgs) =
     transfer a.DE_ExpectedArity a.DE_Stack |> ignore
     ER_ExtendSuccess (finalize ())
 
+let doExtendLet (args : RuntimeDatum list) (captures : RuntimeDatum ref array) =
+  Array.append captures (args |> List.rev |> List.map (fun x -> ref x) |> List.toArray)
+
+let doExtendLetRec (argCount : int) (captures : RuntimeDatum ref array) =
+  Array.append captures (Array.init argCount (fun _ -> ref R_Unspecified))
+
 let tryArgSplit (i : int) (s : RuntimeDatum list) =
   if (List.length s) >= i then
     Some (List.take i s, List.skip i s)
@@ -1768,7 +1774,26 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
           | v1 :: v2 :: rest ->
               { ms with MS_Stack = v2 :: v1 :: rest }
           | _ -> failwith "RO_Swap: stack underflow"
-    // RO_Let
-    // RO_LetRec
-    // RO_CallLetRec
+    | RO_Let letArgs ->
+        match tryArgSplit letArgs.LA_Variables ms.MS_Stack with
+          | Some (args, newStack) ->
+              let newEnv = doExtendLet args (doCaptures ms.MS_Env letArgs.LA_Captures)
+              { ms with MS_Env = newEnv }
+          | None -> failwith "RO_Let: stack underflow"
+    | RO_LetRec letArgs ->
+        let newEnv = doExtendLetRec letArgs.LA_Variables (doCaptures ms.MS_Env letArgs.LA_Captures)
+        { ms with MS_Env = newEnv }
+    | RO_CallLetRec argCount ->
+        match ms.MS_Stack with
+          | uProc :: rest ->
+              match uProc with
+                | R_Procedure proc ->
+                    { ms with
+                        MS_Stack = [] ;
+                        MS_PC = proc.RP_Target ;
+                        MS_Env = doExtendLetRec argCount proc.RP_Captures ;
+                        MS_ReturnTo = RK_Continuation { RD_Stack = ms.MS_Stack ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
+                    }
+                | _ -> failwith "RO_CallLetRec: attempt to call non-procedure"
+          | _ -> failwith "RO_CallLetRec: stack underflow (attempting to pop procedure)"
     | _ -> failwith "Opcode not implemented yet"
