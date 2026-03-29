@@ -1524,7 +1524,7 @@ let doCaptures (env : (RuntimeDatum ref array)) (captures : int array) =
   Array.map (fun i -> env[i]) captures
 
 type DoExtendArgs =
-  { DE_Stack : RuntimeDatum list ;
+  { DE_Stack : RuntimeDatum list ; // args should be [ arg0 ; arg1 ; arg2 ; ... ]
     DE_ActualArity : int ;
     DE_ExpectedArity : int ;
     DE_ExpectsMore : bool ;
@@ -1536,51 +1536,26 @@ type ExtendResult =
   | ER_ExcessiveArguments
   | ER_ExtendSuccess of RuntimeDatum ref array
 
+let tryArgSplit (i : int) (s : RuntimeDatum list) =
+  if (List.length s) >= i then
+    Some (List.take i s, List.skip i s)
+  else
+    None
+
 let doExtend (a : DoExtendArgs) =
-  let newRefs : RuntimeDatum ref list ref = ref []
-  let newRefsLen : int ref = ref 0
-  let finalize () =
-    if newRefsLen.Value = 0 then
-      a.DE_Captures
-    else
-      let arrLen = Array.length a.DE_Captures + newRefsLen.Value
-      let arr = Array.init arrLen (fun i -> if i < a.DE_Captures.Length then a.DE_Captures[i] else ref R_Unspecified)
-      let rec loop (i : int) (refs : RuntimeDatum ref list) =
-        if i = Array.length a.DE_Captures then
-          arr
-        else
-          match refs with
-            | h :: t ->
-               let j = i - 1
-               arr[j] <- h
-               loop j t
-            | _ -> failwith "Unexpectedly ran out of new refs"
-      loop arrLen newRefs.Value
-  let rec transfer (count : int) (stack : RuntimeDatum list) =
-    if count = 0 then
-      stack
-    else
-      match stack with
-        | v :: rest ->
-            newRefs.Value <- (ref v) :: newRefs.Value
-            newRefsLen.Value <- newRefsLen.Value + 1
-            transfer (count - 1) rest
-        | _ ->
-            failwith "Unexpectedly ran out of args"
-  let transferMore (stack : RuntimeDatum list) =
-    newRefs.Value <- (ref (R_List stack)) :: newRefs.Value
-    ()
   if (a.DE_ActualArity < a.DE_ExpectedArity) then
     ER_InsufficientArguments
   elif a.DE_ExpectsMore then
-    let s1 = transfer a.DE_ExpectedArity a.DE_Stack
-    transferMore s1
-    ER_ExtendSuccess (finalize ())
+    match tryArgSplit a.DE_ExpectedArity a.DE_Stack with
+      | Some (args, rest) ->
+          let argsWithRest = List.rev ((R_List rest) :: (List.rev args))
+          ER_ExtendSuccess (Array.append a.DE_Captures (argsWithRest |> List.map (fun x -> ref x) |> List.toArray))
+      | None ->
+          ER_InsufficientArguments
   elif (a.DE_ActualArity > a.DE_ExpectedArity) then
     ER_ExcessiveArguments
   else
-    transfer a.DE_ExpectedArity a.DE_Stack |> ignore
-    ER_ExtendSuccess (finalize ())
+    ER_ExtendSuccess (Array.append a.DE_Captures (a.DE_Stack |> List.map (fun x -> ref x) |> List.toArray))
 
 let doExtendLet (args : RuntimeDatum list) (captures : RuntimeDatum ref array) =
   Array.append captures (args |> List.rev |> List.map (fun x -> ref x) |> List.toArray)
@@ -1588,11 +1563,31 @@ let doExtendLet (args : RuntimeDatum list) (captures : RuntimeDatum ref array) =
 let doExtendLetRec (argCount : int) (captures : RuntimeDatum ref array) =
   Array.append captures (Array.init argCount (fun _ -> ref R_Unspecified))
 
-let tryArgSplit (i : int) (s : RuntimeDatum list) =
-  if (List.length s) >= i then
-    Some (List.take i s, List.skip i s)
-  else
-    None
+type ProcArgsSuccessRecord =
+  { PASR_Proc : RuntimeProcedure ;
+    PASR_Args : RuntimeDatum list ;
+    PASR_Rest : RuntimeDatum list
+  }
+
+type ProcArgsResult =
+  | PAR_Success of ProcArgsSuccessRecord
+  | PAR_CallToNonProcedure
+  | PAR_StackUnderflowPoppingProcedure
+
+let handleProcArgs (argCount : int) (ms : MachineState) =
+  match tryArgSplit (argCount + 1) ms.MS_Stack with
+    | Some (procAndArgs, rest) ->
+        match List.rev procAndArgs with
+          | uProc :: args ->
+              match uProc with
+                | R_Procedure proc ->
+                    PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest }
+                | _ ->
+                    PAR_CallToNonProcedure
+          | _ ->
+              failwith "argCount should have been at least zero"
+    | None ->
+        PAR_StackUnderflowPoppingProcedure
 
 let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
   match ro with
@@ -1700,75 +1695,57 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
     // RO_CallPrimitive
     // RO_TailCallPrimitive
     | RO_Call argCount ->
-        match ms.MS_Stack with
-          | uProc :: rest ->
-              match uProc with
-                | R_Procedure proc ->
-                    let argSplit = tryArgSplit argCount rest
-                    match argSplit with
-                      | Some (args, newRest) ->
-                          let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
-                          match extendResult with
-                            | ER_InsufficientArguments -> failwith "RO_Call: insufficient arguments"
-                            | ER_ExcessiveArguments -> failwith "RO_Call: excessive arguments"
-                            | ER_ExtendSuccess newEnv ->
-                                { ms with
-                                    MS_Stack = [] ;
-                                    MS_PC = proc.RP_Target ;
-                                    MS_Env = newEnv ;
-                                    MS_ReturnTo = RK_Continuation { RD_Stack = newRest ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
-                                }
-                      | None -> failwith "RO_Call: stack underflow"
-                | _ -> failwith "RO_Call: attempt to call non-procedure"
-          | _ -> failwith "RO_Call: stack underflow (attempting to pop procedure)"
+        match handleProcArgs argCount ms with
+          | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest } ->
+              let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
+              match extendResult with
+                | ER_InsufficientArguments -> failwith "RO_Call: insufficient arguments"
+                | ER_ExcessiveArguments -> failwith "RO_Call: excessive arguments"
+                | ER_ExtendSuccess newEnv ->
+                    { ms with
+                        MS_Stack = [] ;
+                        MS_PC = proc.RP_Target ;
+                        MS_Env = newEnv ;
+                        MS_ReturnTo = RK_Continuation { RD_Stack = rest ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
+                    }
+          | PAR_CallToNonProcedure -> failwith "RO_Call: attempt to call non-procedure"
+          | PAR_StackUnderflowPoppingProcedure -> failwith "RO_Call: stack underflow (attempting to pop procedure)"
     | RO_TailCall argCount ->
-        match ms.MS_Stack with
-          | uProc :: rest ->
-              match uProc with
-                | R_Procedure proc ->
-                    let argSplit = tryArgSplit argCount rest
-                    match argSplit with
-                      | Some (args, newRest) ->
-                          let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
-                          match extendResult with
-                            | ER_InsufficientArguments -> failwith "RO_TailCall: insufficient arguments"
-                            | ER_ExcessiveArguments -> failwith "RO_TailCall: excessive arguments"
-                            | ER_ExtendSuccess newEnv ->
-                                { ms with
-                                    MS_Stack = [] ;
-                                    MS_PC = proc.RP_Target ;
-                                    MS_Env = newEnv
-                                    // MS_ReturnTo is unmodified
-                                }
-                      | None -> failwith "RO_TailCall: stack underflow"
-                | _ -> failwith "RO_TailCall: attempt to call non-procedure"
-          | _ -> failwith "RO_TailCall: stack underflow (attempting to pop procedure)"
+        match handleProcArgs argCount ms with
+          | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest } ->
+              let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
+              match extendResult with
+                | ER_InsufficientArguments -> failwith "RO_TailCall: insufficient arguments"
+                | ER_ExcessiveArguments -> failwith "RO_TailCall: excessive arguments"
+                | ER_ExtendSuccess newEnv ->
+                    { ms with
+                        MS_Stack = [] ;
+                        MS_PC = proc.RP_Target ;
+                        MS_Env = newEnv
+                        // MS_ReturnTo is unmodified
+                    }
+          | PAR_CallToNonProcedure -> failwith "RO_TailCall: attempt to call non-procedure"
+          | PAR_StackUnderflowPoppingProcedure -> failwith "RO_TailCall: stack underflow (attempting to pop procedure)"
     | RO_MkProcedure rmpa ->
         let captures = doCaptures ms.MS_Env rmpa.RMPA_Captures
         let proc = R_Procedure { RP_MinArity = rmpa.RMPA_MinArity ; RP_More = rmpa.RMPA_More ; RP_Captures = captures ; RP_Target = rmpa.RMPA_Target }
         { ms with MS_Stack = proc :: ms.MS_Stack }
     | RO_CallWithCatch argCount ->
-        match ms.MS_Stack with
-          | uProc :: rest ->
-              match uProc with
-                | R_Procedure proc ->
-                    let argSplit = tryArgSplit argCount rest
-                    match argSplit with
-                      | Some (args, newRest) ->
-                          let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
-                          match extendResult with
-                            | ER_InsufficientArguments -> failwith "RO_CallWithCatch: insufficient arguments"
-                            | ER_ExcessiveArguments -> failwith "RO_CallWithCatch: excessive arguments"
-                            | ER_ExtendSuccess newEnv ->
-                                { ms with
-                                    MS_Stack = [] ;
-                                    MS_PC = proc.RP_Target ;
-                                    MS_Env = newEnv ;
-                                    MS_ReturnTo = RK_ContinuationWithCatch { RD_Stack = newRest ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
-                                }
-                      | None -> failwith "RO_CallWithCatch: stack underflow"
-                | _ -> failwith "RO_CallWithCatch: attempt to call non-procedure"
-          | _ -> failwith "RO_CallWithCatch: stack underflow (attempting to pop procedure)"
+        match handleProcArgs argCount ms with
+          | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest } ->
+              let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
+              match extendResult with
+                | ER_InsufficientArguments -> failwith "RO_CallWithCatch: insufficient arguments"
+                | ER_ExcessiveArguments -> failwith "RO_CallWithCatch: excessive arguments"
+                | ER_ExtendSuccess newEnv ->
+                    { ms with
+                        MS_Stack = [] ;
+                        MS_PC = proc.RP_Target ;
+                        MS_Env = newEnv ;
+                        MS_ReturnTo = RK_ContinuationWithCatch { RD_Stack = rest ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
+                    }
+          | PAR_CallToNonProcedure -> failwith "RO_TailCall: attempt to call non-procedure"
+          | PAR_StackUnderflowPoppingProcedure -> failwith "RO_TailCall: stack underflow (attempting to pop procedure)"
     | RO_Swap ->
         match ms.MS_Stack with
           | v1 :: v2 :: rest ->
