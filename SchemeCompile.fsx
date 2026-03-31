@@ -1341,7 +1341,7 @@ type MachineState =
   }
 and MachineStep =
   | M_Exec of int
-  | M_Call of RuntimeProcedure
+  | M_Call of CallData
   | M_Halt of string // this is sort of a temporary measure until proper exception handling is implemented
 and ContinuationData =
   { RD_Stack : RuntimeDatum list ;
@@ -1374,6 +1374,23 @@ and RuntimeDatum =
   | R_List of RuntimeDatum list
   | R_Vector of RuntimeDatum[]
   | R_Procedure of RuntimeProcedure
+and CallData =
+  { CD_Proc : RuntimeProcedure ;
+    CD_Args : RuntimeDatum list ;
+    CD_K : RuntimeContinuation
+  }
+
+let procArity (p : RuntimeProcedure) =
+  match p with
+    | RP_StandardProcedure spd -> spd.RP_MinArity
+    | RP_CallCc -> 1
+    | RP_ContinuationProcedure _ -> 1
+
+let procMoreArity (p : RuntimeProcedure) =
+  match p with
+    | RP_StandardProcedure spd -> spd.RP_More
+    | RP_CallCc -> false
+    | RP_ContinuationProcedure _ -> false
 
 type RuntimeMakeProcedureArgs =
   { RMPA_MinArity : int ;
@@ -1709,33 +1726,17 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
     | RO_Call argCount ->
         match handleProcArgs argCount ms with
           | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest } ->
-              let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
-              match extendResult with
-                | ER_InsufficientArguments -> failwith "RO_Call: insufficient arguments"
-                | ER_ExcessiveArguments -> failwith "RO_Call: excessive arguments"
-                | ER_ExtendSuccess newEnv ->
-                    { ms with
-                        MS_Stack = [] ;
-                        MS_NextStep = M_Exec proc.RP_Target ;
-                        MS_Env = newEnv ;
-                        MS_ReturnTo = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
-                    }
+              { ms with
+                  MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = args ; CD_K = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo } } ;
+              }
           | PAR_CallToNonProcedure -> failwith "RO_Call: attempt to call non-procedure"
           | PAR_StackUnderflowPoppingProcedure -> failwith "RO_Call: stack underflow (attempting to pop procedure)"
     | RO_TailCall argCount ->
         match handleProcArgs argCount ms with
-          | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = _rest } ->
-              let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
-              match extendResult with
-                | ER_InsufficientArguments -> failwith "RO_TailCall: insufficient arguments"
-                | ER_ExcessiveArguments -> failwith "RO_TailCall: excessive arguments"
-                | ER_ExtendSuccess newEnv ->
-                    { ms with
-                        MS_Stack = [] ;
-                        MS_NextStep = M_Exec proc.RP_Target ;
-                        MS_Env = newEnv
-                        // MS_ReturnTo is unmodified
-                    }
+          | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest } ->
+              { ms with
+                  MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = args ; CD_K = ms.MS_ReturnTo }
+              }
           | PAR_CallToNonProcedure -> failwith "RO_TailCall: attempt to call non-procedure"
           | PAR_StackUnderflowPoppingProcedure -> failwith "RO_TailCall: stack underflow (attempting to pop procedure)"
     | RO_MkProcedure rmpa ->
@@ -1745,17 +1746,9 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
     | RO_CallWithCatch argCount ->
         match handleProcArgs argCount ms with
           | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest } ->
-              let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
-              match extendResult with
-                | ER_InsufficientArguments -> failwith "RO_CallWithCatch: insufficient arguments"
-                | ER_ExcessiveArguments -> failwith "RO_CallWithCatch: excessive arguments"
-                | ER_ExtendSuccess newEnv ->
-                    { ms with
-                        MS_Stack = [] ;
-                        MS_NextStep = M_Exec proc.RP_Target ;
-                        MS_Env = newEnv ;
-                        MS_ReturnTo = RK_ContinuationWithCatch { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
-                    }
+              { ms with
+                  MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = args ; CD_K = RK_ContinuationWithCatch { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo } } ;
+              }
           | PAR_CallToNonProcedure -> failwith "RO_TailCall: attempt to call non-procedure"
           | PAR_StackUnderflowPoppingProcedure -> failwith "RO_TailCall: stack underflow (attempting to pop procedure)"
     | RO_Swap ->
@@ -1780,10 +1773,7 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
               match uProc with
                 | R_Procedure proc ->
                     { ms with
-                        MS_Stack = [] ;
-                        MS_NextStep = M_Exec proc.RP_Target ;
-                        MS_Env = doExtendLetRec argCount proc.RP_Captures ;
-                        MS_ReturnTo = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
+                        MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = List.init argCount (fun _ -> R_Unspecified) ; CD_K = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo } }
                     }
                 | _ -> failwith "RO_CallLetRec: attempt to call non-procedure"
           | _ -> failwith "RO_CallLetRec: stack underflow (attempting to pop procedure)"
@@ -1798,11 +1788,10 @@ let nextStep (code : RuntimeOpcode array) (ms : MachineState) =
           runOpcode ro newMs
         else
           failwith "Program counter out of bounds"
-    | M_Call proc ->
-        // expectation is that the arguments are still on the stack but the desired continuation is in MS_ReturnTo
+    | M_Call { CD_Proc = proc ; CD_Args = args ; CD_K = k } ->
         match proc with
           | RP_StandardProcedure spd ->
-              let extendResult = doExtend { DE_Stack = ms.MS_Stack ; DE_ActualArity = List.length ms.MS_Stack ; DE_ExpectedArity = spd.RP_MinArity ; DE_ExpectsMore = spd.RP_More ; DE_Captures = spd.RP_Captures }
+              let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = spd.RP_MinArity ; DE_ExpectsMore = spd.RP_More ; DE_Captures = spd.RP_Captures }
               match extendResult with
                   | ER_InsufficientArguments -> failwith "RO_Call: insufficient arguments"
                   | ER_ExcessiveArguments -> failwith "RO_Call: excessive arguments"
@@ -1811,10 +1800,20 @@ let nextStep (code : RuntimeOpcode array) (ms : MachineState) =
                           MS_Stack = [] ;
                           MS_NextStep = M_Exec spd.RP_Target ;
                           MS_Env = newEnv ;
-                          // MS_ReturnTo is unmodified
+                          MS_ReturnTo = k
                       }
           | RP_CallCc ->
-              failwith "todo"
+              match args with
+                | uProc :: rest ->
+                    match uProc with
+                      | R_Procedure proc ->
+                          { ms with
+                              MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = (R_Procedure (RP_ContinuationProcedure k)) :: rest ; CD_K = k } ;
+                          }
+                      | _ ->
+                          failwith "Argument to call/cc was not a procedure"
+                | _ ->
+                    failwith "Stack underflow (attempting to pop argument of call/cc)"
           | RP_ContinuationProcedure cont ->
               failwith "todo"
     | M_Halt msg ->
