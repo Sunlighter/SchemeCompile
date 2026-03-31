@@ -1331,12 +1331,38 @@ let pcTest4 =
   "  (let ((add-my-constant (make-adder my-constant))) " +
   "    (add-my-constant other-constant)))"
 
-type RuntimeProcedure =
+type MachineState =
+  { MS_Stack : RuntimeDatum list ;
+    MS_NextStep : MachineStep ;
+    MS_Literals : RuntimeDatum array ;
+    MS_Env : (RuntimeDatum ref) array ;
+    MS_ReturnTo : RuntimeContinuation ;
+    MS_Done : bool
+  }
+and MachineStep =
+  | M_Exec of int
+  | M_Call of RuntimeProcedure
+  | M_Halt of string // this is sort of a temporary measure until proper exception handling is implemented
+and ContinuationData =
+  { RD_Stack : RuntimeDatum list ;
+    RD_PC : int ;
+    RD_Env : (RuntimeDatum ref) array
+    RD_ReturnTo : RuntimeContinuation
+  }
+and RuntimeContinuation =
+  | RK_FinalContinuation
+  | RK_Continuation of ContinuationData
+  | RK_ContinuationWithCatch of ContinuationData
+and StandardProcedureData =
   { RP_MinArity : int ;
     RP_More : bool ;
     RP_Captures : (RuntimeDatum ref) array ;
     RP_Target : int
   }
+and RuntimeProcedure =
+  | RP_StandardProcedure of StandardProcedureData
+  | RP_CallCc
+  | RP_ContinuationProcedure of RuntimeContinuation
 and RuntimeDatum =
   | R_Unspecified
   | R_Bool of bool
@@ -1474,28 +1500,10 @@ let makeRuntimeOpcodeArray (ol : Opcode list) =
                 loop t (currentIndex + opcodeLength o) (ro :: acc)
   loop ol 0 []
 
-type MachineState =
-  { MS_Stack : RuntimeDatum list ;
-    MS_PC : int ;
-    MS_Literals : RuntimeDatum array ;
-    MS_Env : (RuntimeDatum ref) array ;
-    MS_ReturnTo : RuntimeContinuation ;
-    MS_Done : bool
-  }
-and ContinuationData =
-  { RD_Stack : RuntimeDatum list ;
-    RD_PC : int ;
-    RD_Env : (RuntimeDatum ref) array
-    RD_ReturnTo : RuntimeContinuation
-  }
-and RuntimeContinuation =
-  | RK_FinalContinuation
-  | RK_Continuation of ContinuationData
-  | RK_ContinuationWithCatch of ContinuationData
 
 let initialMachineState =
   { MS_Stack = [] ;
-    MS_PC = 0 ;
+    MS_NextStep = M_Exec 0 ;
     MS_Literals = [||] ;
     MS_Env = [||] ;
     MS_ReturnTo = RK_FinalContinuation ;
@@ -1675,15 +1683,15 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
               if isTruthy v then
                 { ms with MS_Stack = rest }
               else
-                { ms with MS_PC = target ; MS_Stack = rest }
+                { ms with MS_NextStep = M_Exec target ; MS_Stack = rest }
           | _ -> failwith "RO_JumpIfFalse: stack underflow"
     | RO_Jump target ->
-        { ms with MS_PC = target }
+        { ms with MS_NextStep = M_Exec target }
     | RO_JumpIfTrue target ->
         match ms.MS_Stack with
           | v :: rest ->
               if isTruthy v then
-                { ms with MS_PC = target ; MS_Stack = rest }
+                { ms with MS_NextStep = M_Exec target ; MS_Stack = rest }
               else
                 { ms with MS_Stack = rest }
           | _ -> failwith "RO_JumpIfTrue: stack underflow"
@@ -1728,7 +1736,7 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
           | PAR_StackUnderflowPoppingProcedure -> failwith "RO_TailCall: stack underflow (attempting to pop procedure)"
     | RO_MkProcedure rmpa ->
         let captures = doCaptures ms.MS_Env rmpa.RMPA_Captures
-        let proc = R_Procedure { RP_MinArity = rmpa.RMPA_MinArity ; RP_More = rmpa.RMPA_More ; RP_Captures = captures ; RP_Target = rmpa.RMPA_Target }
+        let proc = R_Procedure (RP_StandardProcedure { RP_MinArity = rmpa.RMPA_MinArity ; RP_More = rmpa.RMPA_More ; RP_Captures = captures ; RP_Target = rmpa.RMPA_Target })
         { ms with MS_Stack = proc :: ms.MS_Stack }
     | RO_CallWithCatch argCount ->
         match handleProcArgs argCount ms with
@@ -1776,3 +1784,34 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                 | _ -> failwith "RO_CallLetRec: attempt to call non-procedure"
           | _ -> failwith "RO_CallLetRec: stack underflow (attempting to pop procedure)"
     | _ -> failwith "Opcode not implemented yet"
+
+let nextStep (code : RuntimeOpcode array) (ms : MachineState) =
+  match ms.MS_NextStep with
+    | M_Exec pc ->
+        if pc >= 0 && pc < code.Length then
+          let ro = code[pc]
+          let newMs = { ms with MS_NextStep = MS_Exec (pc + 1) }
+          runOpcode ro newMs
+        else
+          failwith "Program counter out of bounds"
+    | M_Call proc ->
+        // expectation is that the arguments are still on the stack but the desired continuation is in MS_ReturnTo
+        match proc with
+          | RP_StandardProcedure spd ->
+              let extendResult = doExtend { DE_Stack = ms.MS_Stack ; DE_ActualArity = List.length ms.MS_Stack ; DE_ExpectedArity = spd.RP_MinArity ; DE_ExpectsMore = spd.RP_More ; DE_Captures = spd.RP_Captures }
+              match extendResult with
+                  | ER_InsufficientArguments -> failwith "RO_Call: insufficient arguments"
+                  | ER_ExcessiveArguments -> failwith "RO_Call: excessive arguments"
+                  | ER_ExtendSuccess newEnv ->
+                      { ms with
+                          MS_Stack = [] ;
+                          MS_NextStep = M_Exec spd.RP_Target ;
+                          MS_Env = newEnv ;
+                          // MS_ReturnTo is unmodified
+                      }
+          | RP_CallCc ->
+              failwith "todo"
+          | RP_ContinuationProcedure cont ->
+              failwith "todo"
+    | M_Halt msg ->
+        failwithf "Machine halted: %s" msg
