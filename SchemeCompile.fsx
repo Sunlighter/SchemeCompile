@@ -1804,19 +1804,21 @@ let nextStep (code : RuntimeOpcode array) (ms : MachineState) =
                       }
           | RP_CallCc ->
               match args with
-                | uProc :: rest ->
+                | [ uProc ] ->
                     match uProc with
                       | R_Procedure proc ->
                           { ms with
-                              MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = (R_Procedure (RP_ContinuationProcedure k)) :: rest ; CD_K = k } ;
+                              MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = [ (R_Procedure (RP_ContinuationProcedure k)) ] ; CD_K = k } ;
                           }
                       | _ ->
                           failwith "Argument to call/cc was not a procedure"
-                | _ ->
-                    failwith "Stack underflow (attempting to pop argument of call/cc)"
+                | _ :: _ ->
+                    failwith "call/cc called with too many arguments"
+                | [] ->
+                    failwith "call/cc called with no arguments (expected exactly one)"
           | RP_ContinuationProcedure cont ->
               match args with
-                | retval :: _ ->
+                | [ retval ] ->
                     match cont with
                       | RK_Continuation kd ->
                           { ms with
@@ -1839,7 +1841,9 @@ let nextStep (code : RuntimeOpcode array) (ms : MachineState) =
                               MS_Env = Array.copy kd.RD_Env ;
                               MS_ReturnTo = kd.RD_ReturnTo
                           }
-                | _ ->
-                    failwith "Insufficient arguments passed to continuation procedure"
+                | _ :: _ ->
+                    failwith "Continuation procedure called with too many arguments (expected exactly one)"
+                | [] ->
+                    failwith "Continuation procedure called with no arguments (expected exactly one)"
     | M_Halt msg ->
         failwithf "Machine halted: %s" msg
