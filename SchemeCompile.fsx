@@ -1598,6 +1598,10 @@ let handleProcArgs (argCount : int) (ms : MachineState) =
         PAR_StackUnderflowPoppingProcedure
 
 let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
+  let nextPC =
+    match ms.MS_NextStep with
+      | M_Exec pc -> pc
+      | _ -> failwith "Next step should have been M_Exec"
   match ro with
     | RO_CreateLiteralPool size ->
         { ms with MS_Literals = Array.init size (fun _ -> R_Unspecified) }
@@ -1656,14 +1660,14 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                 | RK_Continuation kd ->
                     { ms with
                         MS_Stack = returnVal :: kd.RD_Stack ;
-                        MS_PC = kd.RD_PC ;
+                        MS_NextStep = M_Exec kd.RD_PC ;
                         MS_Env = Array.copy kd.RD_Env ;
                         MS_ReturnTo = kd.RD_ReturnTo
                     }
                 | RK_ContinuationWithCatch kd ->
                     { ms with
                         MS_Stack = (R_Bool false) :: returnVal :: kd.RD_Stack ;
-                        MS_PC = kd.RD_PC ;
+                        MS_NextStep = M_Exec kd.RD_PC ;
                         MS_Env = Array.copy kd.RD_Env ;
                         MS_ReturnTo = kd.RD_ReturnTo
                     }
@@ -1712,15 +1716,15 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                 | ER_ExtendSuccess newEnv ->
                     { ms with
                         MS_Stack = [] ;
-                        MS_PC = proc.RP_Target ;
+                        MS_NextStep = M_Exec proc.RP_Target ;
                         MS_Env = newEnv ;
-                        MS_ReturnTo = RK_Continuation { RD_Stack = rest ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
+                        MS_ReturnTo = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
                     }
           | PAR_CallToNonProcedure -> failwith "RO_Call: attempt to call non-procedure"
           | PAR_StackUnderflowPoppingProcedure -> failwith "RO_Call: stack underflow (attempting to pop procedure)"
     | RO_TailCall argCount ->
         match handleProcArgs argCount ms with
-          | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest } ->
+          | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = _rest } ->
               let extendResult = doExtend { DE_Stack = args ; DE_ActualArity = List.length args ; DE_ExpectedArity = proc.RP_MinArity ; DE_ExpectsMore = proc.RP_More ; DE_Captures = proc.RP_Captures }
               match extendResult with
                 | ER_InsufficientArguments -> failwith "RO_TailCall: insufficient arguments"
@@ -1728,7 +1732,7 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                 | ER_ExtendSuccess newEnv ->
                     { ms with
                         MS_Stack = [] ;
-                        MS_PC = proc.RP_Target ;
+                        MS_NextStep = M_Exec proc.RP_Target ;
                         MS_Env = newEnv
                         // MS_ReturnTo is unmodified
                     }
@@ -1748,9 +1752,9 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                 | ER_ExtendSuccess newEnv ->
                     { ms with
                         MS_Stack = [] ;
-                        MS_PC = proc.RP_Target ;
+                        MS_NextStep = M_Exec proc.RP_Target ;
                         MS_Env = newEnv ;
-                        MS_ReturnTo = RK_ContinuationWithCatch { RD_Stack = rest ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
+                        MS_ReturnTo = RK_ContinuationWithCatch { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
                     }
           | PAR_CallToNonProcedure -> failwith "RO_TailCall: attempt to call non-procedure"
           | PAR_StackUnderflowPoppingProcedure -> failwith "RO_TailCall: stack underflow (attempting to pop procedure)"
@@ -1777,9 +1781,9 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
                 | R_Procedure proc ->
                     { ms with
                         MS_Stack = [] ;
-                        MS_PC = proc.RP_Target ;
+                        MS_NextStep = M_Exec proc.RP_Target ;
                         MS_Env = doExtendLetRec argCount proc.RP_Captures ;
-                        MS_ReturnTo = RK_Continuation { RD_Stack = rest ; RD_PC = ms.MS_PC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
+                        MS_ReturnTo = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
                     }
                 | _ -> failwith "RO_CallLetRec: attempt to call non-procedure"
           | _ -> failwith "RO_CallLetRec: stack underflow (attempting to pop procedure)"
@@ -1790,7 +1794,7 @@ let nextStep (code : RuntimeOpcode array) (ms : MachineState) =
     | M_Exec pc ->
         if pc >= 0 && pc < code.Length then
           let ro = code[pc]
-          let newMs = { ms with MS_NextStep = MS_Exec (pc + 1) }
+          let newMs = { ms with MS_NextStep = M_Exec (pc + 1) }
           runOpcode ro newMs
         else
           failwith "Program counter out of bounds"
