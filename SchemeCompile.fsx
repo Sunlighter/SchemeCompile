@@ -1815,6 +1815,31 @@ let nextStep (code : RuntimeOpcode array) (ms : MachineState) =
                 | _ ->
                     failwith "Stack underflow (attempting to pop argument of call/cc)"
           | RP_ContinuationProcedure cont ->
-              failwith "todo"
+              match args with
+                | retval :: _ ->
+                    match cont with
+                      | RK_Continuation kd ->
+                          { ms with
+                              MS_Stack = retval :: kd.RD_Stack ;
+                              MS_NextStep = M_Exec kd.RD_PC ;
+                              MS_Env = Array.copy kd.RD_Env ;
+                              MS_ReturnTo = kd.RD_ReturnTo
+                          }
+                      | RK_FinalContinuation ->
+                          { ms with
+                              MS_Stack = retval :: ms.MS_Stack ;
+                              MS_NextStep = M_Halt "Returned to final continuation" ;
+                              MS_Env = ms.MS_Env ;
+                              MS_ReturnTo = RK_FinalContinuation
+                          }
+                      | RK_ContinuationWithCatch kd ->
+                          { ms with
+                              MS_Stack = (R_Bool true) :: retval :: kd.RD_Stack ;
+                              MS_NextStep = M_Exec kd.RD_PC ;
+                              MS_Env = Array.copy kd.RD_Env ;
+                              MS_ReturnTo = kd.RD_ReturnTo
+                          }
+                | _ ->
+                    failwith "Insufficient arguments passed to continuation procedure"
     | M_Halt msg ->
         failwithf "Machine halted: %s" msg
