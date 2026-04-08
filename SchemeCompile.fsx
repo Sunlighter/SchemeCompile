@@ -1342,6 +1342,7 @@ type MachineState =
 and MachineStep =
   | M_Exec of int
   | M_Call of CallData
+  | M_Return of ReturnData
   | M_Halt of string // this is sort of a temporary measure until proper exception handling is implemented
 and ContinuationData =
   { RD_Stack : RuntimeDatum list ;
@@ -1378,6 +1379,10 @@ and CallData =
   { CD_Proc : RuntimeProcedure ;
     CD_Args : RuntimeDatum list ;
     CD_K : RuntimeContinuation
+  }
+and ReturnData =
+  { RD_K : RuntimeContinuation ;
+    RD_Val : RuntimeDatum
   }
 
 let procArity (p : RuntimeProcedure) =
@@ -1673,23 +1678,7 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
     | RO_Ret ->
         match ms.MS_Stack with
           | returnVal :: _ ->
-              match ms.MS_ReturnTo with
-                | RK_Continuation kd ->
-                    { ms with
-                        MS_Stack = returnVal :: kd.RD_Stack ;
-                        MS_NextStep = M_Exec kd.RD_PC ;
-                        MS_Env = Array.copy kd.RD_Env ;
-                        MS_ReturnTo = kd.RD_ReturnTo
-                    }
-                | RK_ContinuationWithCatch kd ->
-                    { ms with
-                        MS_Stack = (R_Bool false) :: returnVal :: kd.RD_Stack ;
-                        MS_NextStep = M_Exec kd.RD_PC ;
-                        MS_Env = Array.copy kd.RD_Env ;
-                        MS_ReturnTo = kd.RD_ReturnTo
-                    }
-                | RK_FinalContinuation ->
-                    { ms with MS_Done = true }
+             { ms with MS_NextStep = M_Return { RD_K = ms.MS_ReturnTo ; RD_Val = returnVal } }
           | _ -> failwith "RO_Ret: stack underflow"
     | RO_LdUnspecified ->
         { ms with MS_Stack = R_Unspecified :: ms.MS_Stack }
@@ -1819,31 +1808,33 @@ let nextStep (code : RuntimeOpcode array) (ms : MachineState) =
           | RP_ContinuationProcedure cont ->
               match args with
                 | [ retval ] ->
-                    match cont with
-                      | RK_Continuation kd ->
-                          { ms with
-                              MS_Stack = retval :: kd.RD_Stack ;
-                              MS_NextStep = M_Exec kd.RD_PC ;
-                              MS_Env = Array.copy kd.RD_Env ;
-                              MS_ReturnTo = kd.RD_ReturnTo
-                          }
-                      | RK_FinalContinuation ->
-                          { ms with
-                              MS_Stack = retval :: ms.MS_Stack ;
-                              MS_NextStep = M_Halt "Returned to final continuation" ;
-                              MS_Env = ms.MS_Env ;
-                              MS_ReturnTo = RK_FinalContinuation
-                          }
-                      | RK_ContinuationWithCatch kd ->
-                          { ms with
-                              MS_Stack = (R_Bool true) :: retval :: kd.RD_Stack ;
-                              MS_NextStep = M_Exec kd.RD_PC ;
-                              MS_Env = Array.copy kd.RD_Env ;
-                              MS_ReturnTo = kd.RD_ReturnTo
-                          }
+                    { ms with MS_NextStep = M_Return { RD_K = cont ; RD_Val = retval } }
                 | _ :: _ ->
                     failwith "Continuation procedure called with too many arguments (expected exactly one)"
                 | [] ->
                     failwith "Continuation procedure called with no arguments (expected exactly one)"
+    | M_Return { RD_K = k ; RD_Val = v } ->
+        match k with
+          | RK_Continuation kd ->
+              { ms with
+                  MS_Stack = v :: kd.RD_Stack ;
+                  MS_NextStep = M_Exec kd.RD_PC ;
+                  MS_Env = Array.copy kd.RD_Env ;
+                  MS_ReturnTo = kd.RD_ReturnTo
+              }
+          | RK_ContinuationWithCatch kd ->
+              { ms with
+                  MS_Stack = (R_Bool false) :: v :: kd.RD_Stack ;
+                  MS_NextStep = M_Exec kd.RD_PC ;
+                  MS_Env = Array.copy kd.RD_Env ;
+                  MS_ReturnTo = kd.RD_ReturnTo
+              }
+          | RK_FinalContinuation ->
+              { ms with
+                  MS_Stack = v :: ms.MS_Stack ;
+                  MS_NextStep = M_Halt "Returned to final continuation" ;
+                  MS_Env = ms.MS_Env ;
+                  MS_ReturnTo = RK_FinalContinuation
+              }
     | M_Halt msg ->
         failwithf "Machine halted: %s" msg
