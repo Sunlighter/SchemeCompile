@@ -1715,8 +1715,9 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
     | RO_Call argCount ->
         match handleProcArgs argCount ms with
           | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest } ->
+              let k = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
               { ms with
-                  MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = args ; CD_K = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo } } ;
+                  MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = args ; CD_K = k } ;
               }
           | PAR_CallToNonProcedure -> failwith "RO_Call: attempt to call non-procedure"
           | PAR_StackUnderflowPoppingProcedure -> failwith "RO_Call: stack underflow (attempting to pop procedure)"
@@ -1735,8 +1736,9 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
     | RO_CallWithCatch argCount ->
         match handleProcArgs argCount ms with
           | PAR_Success { PASR_Proc = proc ; PASR_Args = args ; PASR_Rest = rest } ->
+              let k = RK_ContinuationWithCatch { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
               { ms with
-                  MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = args ; CD_K = RK_ContinuationWithCatch { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo } } ;
+                  MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = args ; CD_K = k } ;
               }
           | PAR_CallToNonProcedure -> failwith "RO_TailCall: attempt to call non-procedure"
           | PAR_StackUnderflowPoppingProcedure -> failwith "RO_TailCall: stack underflow (attempting to pop procedure)"
@@ -1761,8 +1763,9 @@ let runOpcode (ro : RuntimeOpcode) (ms : MachineState) =
           | uProc :: rest ->
               match uProc with
                 | R_Procedure proc ->
+                    let k = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo }
                     { ms with
-                        MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = List.init argCount (fun _ -> R_Unspecified) ; CD_K = RK_Continuation { RD_Stack = rest ; RD_PC = nextPC ; RD_Env = ms.MS_Env ; RD_ReturnTo = ms.MS_ReturnTo } }
+                        MS_NextStep = M_Call { CD_Proc = proc ; CD_Args = List.init argCount (fun _ -> R_Unspecified) ; CD_K = k }
                     }
                 | _ -> failwith "RO_CallLetRec: attempt to call non-procedure"
           | _ -> failwith "RO_CallLetRec: stack underflow (attempting to pop procedure)"
