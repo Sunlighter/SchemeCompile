@@ -1343,6 +1343,7 @@ and MachineStep =
   | M_Exec of int
   | M_Call of CallData
   | M_Return of ReturnData
+  | M_Throw of ThrowData
   | M_Halt of string // this is sort of a temporary measure until proper exception handling is implemented
 and ContinuationData =
   { RD_Stack : RuntimeDatum list ;
@@ -1383,6 +1384,10 @@ and CallData =
 and ReturnData =
   { RD_K : RuntimeContinuation ;
     RD_Val : RuntimeDatum
+  }
+and ThrowData =
+  { TD_K : RuntimeContinuation ;
+    TD_Exc : RuntimeDatum
   }
 
 let procArity (p : RuntimeProcedure) =
@@ -1836,6 +1841,26 @@ let nextStep (code : RuntimeOpcode array) (ms : MachineState) =
               { ms with
                   MS_Stack = v :: ms.MS_Stack ;
                   MS_NextStep = M_Halt "Returned to final continuation" ;
+                  MS_Env = ms.MS_Env ;
+                  MS_ReturnTo = RK_FinalContinuation
+              }
+    | M_Throw { TD_K = k ; TD_Exc = exc } ->
+        match k with
+          | RK_Continuation kd ->
+              { ms with
+                  MS_ReturnTo = kd.RD_ReturnTo
+              }
+          | RK_ContinuationWithCatch kd ->
+              { ms with
+                  MS_Stack = (R_Bool true) :: exc :: kd.RD_Stack ;
+                  MS_NextStep = M_Exec kd.RD_PC ;
+                  MS_Env = Array.copy kd.RD_Env ;
+                  MS_ReturnTo = kd.RD_ReturnTo
+              }
+          | RK_FinalContinuation ->
+              { ms with
+                  MS_Stack = exc :: ms.MS_Stack ;
+                  MS_NextStep = M_Halt "Thrown to final continuation" ;
                   MS_Env = ms.MS_Env ;
                   MS_ReturnTo = RK_FinalContinuation
               }
